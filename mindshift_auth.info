@@ -1,0 +1,4 @@
+name = Mindshift Authentication
+description = Authenticates logins against Mindshift; for use ONLY on WRI's intranet
+core=6.x
+version="6.x-1.0"

@@ -1,0 +1,114 @@
+<?php
+
+/* The Drupal6 version of this module is largely cribbed from the site_network module,
+   which allows for authentication against other Drupal sites
+*/
+
+function mindshift_auth_menu() {
+
+  $items['user/password'] = array(
+    'title' => 'Request new password',
+	'page callback' => 'mindshift_auth_user_password',
+	'access callback' => 'user_is_anonymous',
+	'type' => MENU_LOCAL_TASK,
+  );
+
+  return $items;
+}
+
+function mindshift_auth_user_password() {
+
+  return '<p>Login to the blog with your Mindshift User ID and Password.  To change your Mindshift password, press CTRL+ALT+DELETE and click "Change Password".</p>';
+}
+
+function mindshift_auth_form_user_login_alter(&$form, &$form_state) {
+  $form['mindshift_note'] = array(
+	'#value' => '<strong>Note:</strong> login with your Mindshift ID (e.g., jane.smith@wri.org) and password.',
+	'#prefix' => '<div class="note">',
+	'#suffix' => '</div>',
+	'#weight' => -5,
+  );
+
+  // insert our validator
+  array_unshift($form['#validate'], 'mindshift_auth_login_validate');
+
+  // no links
+  unset($form['links']);
+}
+
+function mindshift_auth_form_user_login_block_alter(&$form, $form_state) {
+  return mindshift_auth_form_user_login_alter($form, $form_state);
+}
+
+function mindshift_auth_form_user_profile_form_alter(&$form, $form_state) {
+
+  if( ! user_access('change own username') ) {
+	$form['account']['mail']['#description'] = t('Your email address should be the same as your Mindshift ID and cannot be changed. If you need assistance with this, please contact the administrator.');
+	$form['account']['mail']['#disabled'] = true;
+
+	$form['account']['pass']['#description'] .= t('The password here is rarely used. You should change your Mindshift password instead.');
+  }
+}
+
+/* Validation function for login authentication
+ *
+ * Here, we assume that Drupal is running on a server that enforces server-wide authentication against Mindshift's LDAP server.
+ * In that case, the server will provide the current user/password in the $_SERVER array.
+ */
+
+function mindshift_auth_login_validate(&$form, &$form_state) {
+
+  $login = trim($form_state['values']['name']);
+  list($name,$host) = explode('@', $login);
+  $password = trim($form_state['values']['pass']);
+
+  // Uncomment next 2 lines for testing
+  # $_SERVER['PHP_AUTH_USER'] = $login;
+  # $_SERVER['PHP_AUTH_PW']   = $password;
+
+  if( user_load(array('name' => $login, 'pass' => $password))  ) {
+	// Aha, we actually do match an ordinary account, so just stop and let Drupal core do it
+    return;
+  }
+
+  if( $name && $password && $host == 'wri.org' && isset($_SERVER['PHP_AUTH_USER']) && $_SERVER['PHP_AUTH_USER'] == $login && isset($_SERVER['PHP_AUTH_PW']) && $_SERVER['PHP_AUTH_PW'] == $password ) {
+    // Great, we passed
+	$account = user_external_load($login);
+	if (isset($account->uid)) {
+	  user_external_login($account);
+	}
+	else {
+	  user_external_login_register($login, 'mindshift_auth');
+	}
+  }
+  else {
+	// Disable the other validation processes, since it already failed
+	$form_state['#validate'] = array();
+	$form_state['#submit']  = array();
+
+	form_set_error('name', t('Invalid username or password.'));
+  }
+}
+
+function mindshift_auth_user($op, &$edit, &$account, $category=NULL) {
+
+  if( $op == 'insert' && $edit['authname_mindshift_auth'] ) {
+	/* The user_authenticate function nicely creates user records for authenticated sessions
+	   that do not yet have a user record. But it is up to us to tweak the record so it has
+	   a valid email address and a nice name field.
+
+	   Note there is a chance of a record collision if some other user has renamed their account
+	   to match the name that we automatically generate below, i.e., if I login as john.smith@wri.org
+	   and some other user has changed their account name to John Smith
+    */
+
+	# Mail is same as name
+	$account->mail = $account->name;
+
+    # Change the username from first.last@wri.org to First Last
+	$name = preg_replace('/@wri.org$/i', '', $account->name);
+	$name = ucwords(str_replace('.', ' ', $name));
+	$account->name = $name;
+	db_query("UPDATE {users} SET name='%s', mail='%s' WHERE uid=%d", $account->name, $account->mail, $account->uid);
+  }
+}
